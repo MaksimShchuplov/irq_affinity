@@ -36,7 +36,7 @@ cpuirqmass = ["1", "2", "4", "8", "10", "20", "40", "80", "100", "200", "400", "
               "10000", "20000", "40000", "80000", "100000", "200000", "4000000", "800000"]
 
 
-#������� ����������� �������������� ����������
+
 file = open('/proc/interrupts', "r")
 interruptsmass = []
 
@@ -82,7 +82,7 @@ for string in interruptsmass:
             devhash[devname] = irqmass
 
 for i in devhash:
-#��������� ������� irq-cpu
+#irq-cpu
     print i, str(devhash[i])
     mass = devhash[i]
     kol = int(0)
