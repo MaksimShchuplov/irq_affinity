@@ -6,7 +6,7 @@
 # and open the template in the editor.
 import os
 
-__author__ = "Maksim Shchuplov shchuplov@gmail.com"
+__author__ = "MaksimShchuplov shchuplov@gmail.com"
 __date__ = "$06.06.2012 5:10:22$"
 
 if __name__ == "__main__":
