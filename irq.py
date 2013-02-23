@@ -2,8 +2,7 @@
 # -*- coding: UTF-8 -*-
 # chkconfig: 2345 55 25
 # description: irq
-# To change this template, choose Tools | Templates
-# and open the template in the editor.
+
 import os
 
 __author__ = "Maksim Shchuplov shchuplov@gmail.com"
