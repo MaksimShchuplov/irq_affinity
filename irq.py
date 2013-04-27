@@ -89,7 +89,7 @@ for i in devhash:
     for irq in mass:
         intfile = open("/proc/irq/" + str(irq) + "/smp_affinity", "r")
 
-        # print "should be : echo " + str(cpuirqmass[kol]) + " > /proc/irq/" + str(irq) + "/smp_affinity"
+        ## print "should be : echo " + str(cpuirqmass[kol]) + " > /proc/irq/" + str(irq) + "/smp_affinity"
         if str(cpuirqmass[kol]) not in intfile.readline():
             print "setting up irq " + str(irq) + " to CPU core " + str(
                 kol) + "................" + bcolors.OKGREEN + "[OK!]" + bcolors.ENDC
