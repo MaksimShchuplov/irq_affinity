@@ -10,8 +10,6 @@ __author__ = "Maksim Shchuplov max@fc2.co.jp"
 __date__ = "$06.06.2012 5:10:22$"
 
 if __name__ == "__main__":
-    print "Hello World"
-
     file = open('/proc/interrupts', "r")
     cpukol = len(file.readline().split())
     print "cpuused : " + str(cpukol)
