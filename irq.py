@@ -41,19 +41,12 @@ for i in file:
 file.close()
 devhash = {}
 irqbalanc_enabled = 1
-chkconfig_irq_disable = 1
 for string in interruptsmass:
     #eth
     if "eth" in string:
         if irqbalanc_enabled:
             os.system("killall irqbalance")
             irqbalanc_enabled = 0
-        if chkconfig_irq_disable:
-        #           os.system("rm /etc/cron.hourly/irq.py")
-        #           os.system("chkconfig --del irq.py")
-        #           os.system("rm /etc/init.d/irq.py")
-            os.system("chkconfig irq on")
-            chkconfig_irq_disable = 0
 
         devname = string.split()[-1].split("-")[0]
         if devname + "-" in string:
