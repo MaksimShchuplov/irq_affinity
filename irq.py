@@ -4,7 +4,7 @@
 import os
 
 __author__ = "Maksim Shchuplov shchuplov@gmail.com"
-__date__ = "$06.06.2012 5:10:22$"
+
 
 if __name__ == "__main__":
     file = open('/proc/interrupts', "r")
