@@ -12,6 +12,7 @@ if __name__ == "__main__":
     print "cpuused : " + str(cpukol)
     file.close()
 
+
 class bcolors:
     HEADER = '\033[95m'
     OKBLUE = '\033[94m'
@@ -28,9 +29,32 @@ class bcolors:
         self.FAIL = ''
         self.ENDC = ''
 
-cpuirqmass = ["1", "2", "4", "8", "10", "20", "40", "80", "100", "200", "400", "800", "1000", "2000", "4000", "8000",
-              "10000", "20000", "40000", "80000", "100000", "200000", "4000000", "800000"]
 
+cpuirqmass = [
+    "1",
+    "2",
+    "4",
+    "8",
+    "10",
+    "20",
+    "40",
+    "80",
+    "100",
+    "200",
+    "400",
+    "800",
+    "1000",
+    "2000",
+    "4000",
+    "8000",
+    "10000",
+    "20000",
+    "40000",
+    "80000",
+    "100000",
+    "200000",
+    "4000000",
+    "800000"]
 
 
 file = open('/proc/interrupts', "r")
@@ -42,7 +66,7 @@ file.close()
 devhash = {}
 irqbalanc_enabled = 1
 for string in interruptsmass:
-    #eth
+    # eth
     if "eth" in string:
         if irqbalanc_enabled:
             os.system("killall irqbalance")
@@ -60,7 +84,7 @@ for string in interruptsmass:
                 irqmass.append(int(string.split(":")[0]))
                 devhash[devname] = irqmass
 
-    #megasas
+    # megasas
     if "megasas" in string:
         devname = string.split()[-1].split("-")[0]
         if devname not in devhash:
@@ -74,18 +98,23 @@ for string in interruptsmass:
             devhash[devname] = irqmass
 
 for i in devhash:
-# irq-cpu
+    # irq-cpu
     print i, str(devhash[i])
     mass = devhash[i]
     kol = int(0)
     for irq in mass:
         intfile = open("/proc/irq/" + str(irq) + "/smp_affinity", "r")
 
-        # print "should be : echo " + str(cpuirqmass[kol]) + " > /proc/irq/" + str(irq) + "/smp_affinity"
+        # print "should be : echo " + str(cpuirqmass[kol]) + " > /proc/irq/" +
+        # str(irq) + "/smp_affinity"
         if str(cpuirqmass[kol]) not in intfile.readline():
             print "setting up irq " + str(irq) + " to CPU core " + str(
                 kol) + "................" + bcolors.OKGREEN + "[OK!]" + bcolors.ENDC
-            os.system("echo " + str(cpuirqmass[kol]) + " > /proc/irq/" + str(irq) + "/smp_affinity")
+            os.system("echo " +
+                      str(cpuirqmass[kol]) +
+                      " > /proc/irq/" +
+                      str(irq) +
+                      "/smp_affinity")
         else:
             print "setting up irq " + str(irq) + " to CPU core " + str(
                 kol) + "................" + bcolors.OKGREEN + "[already set]" + bcolors.ENDC
