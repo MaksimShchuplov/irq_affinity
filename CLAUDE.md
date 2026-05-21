@@ -20,12 +20,13 @@ round-robin replacement for `irqbalance` on old systems.
 ## Layout
 
 ```
-irq.py            # CLI entry point and library functions
-tests/test_irq.py # pytest unit tests (synthetic /proc and /sys via tmp_path)
-README.md         # user docs
-LICENSE           # MIT
+irq.py                          # CLI entry point and library functions
+tests/test_irq.py               # pytest unit tests (synthetic /proc, /sys via tmp_path)
+systemd/irq-affinity.service    # sample oneshot unit for persistence
+README.md                       # user docs
+LICENSE                         # MIT
 requirements-dev.txt
-pyproject.toml    # ruff + pytest config
+pyproject.toml                  # ruff + pytest config
 ```
 
 ## How to run
@@ -47,11 +48,13 @@ ruff check . && ruff format --check .
 ```
 
 Tests never touch real `/proc` or `/sys`. Pure helpers (`parse_cpu_list`,
-`format_cpu_list`, `normalize_affinity`, `mask_to_cpus`, `parse_interrupts`,
-`group_irqs_by_device`, `plan_assignments`) are tested directly; topology
-readers (`read_numa_topology`, `device_numa_node`) take a base-path arg so
-they can be pointed at a `tmp_path`; the I/O in `apply_assignments` is
-exercised by monkeypatching `read_current_cpus` / `read_affinity_hint` /
+`format_cpu_list`, `normalize_affinity`, `mask_to_cpus`, `cpus_to_mask_str`,
+`parse_interrupts`, `group_irqs_by_device`, `plan_assignments`,
+`device_cpus`) are tested directly; topology/queue readers
+(`read_numa_topology`, `irq_numa_node`, `device_numa_node`,
+`list_queue_affinity_files`, `apply_rps`) take a base-path arg so they can be
+pointed at a `tmp_path`; the I/O in `apply_assignments` is exercised by
+monkeypatching `read_current_cpus` / `read_affinity_hint` /
 `write_affinity_list`. Keep new sysfs/procfs access behind small functions
 so this stays possible.
 
@@ -75,9 +78,13 @@ so this stays possible.
 - Default behaviour respects the driver `affinity_hint` (managed IRQs).
   Only override it behind `--ignore-hints`; silently fighting the kernel's
   managed-IRQ placement causes write failures (EIO) and worse locality.
-- NUMA node resolution is best-effort: network devices via
-  `/sys/class/net/<dev>/device/numa_node`, everything else falls back to
-  all CPUs. Add lookups, don't assume a node.
+- NUMA node resolution is best-effort and per-IRQ: prefer
+  `/proc/irq/<n>/node` (any device), fall back to a NIC's
+  `/sys/class/net/<dev>/device/numa_node`, then to all CPUs. Add lookups,
+  don't assume a node.
+- RPS/XPS (`--rps`) writes a hex mask (`cpus_to_mask_str`) to
+  `queues/{rx-*/rps_cpus,tx-*/xps_cpus}` — these files take masks, not CPU
+  lists, unlike `smp_affinity_list`. It only applies to network devices.
 - `/proc/interrupts` varies across kernels. The parser skips the header
   line and requires a numeric IRQ prefix — add new filters, not new
   parsers, when possible.

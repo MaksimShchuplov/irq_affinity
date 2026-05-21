@@ -57,6 +57,17 @@ def test_mask_to_cpus() -> None:
     assert irq.mask_to_cpus(0) == []
 
 
+def test_cpus_to_mask_str() -> None:
+    assert irq.cpus_to_mask_str([0, 1]) == "00000003"
+    assert irq.cpus_to_mask_str([]) == "0"
+    assert irq.cpus_to_mask_str([32]) == "00000001,00000000"
+
+
+def test_cpus_to_mask_str_roundtrips_through_normalize() -> None:
+    cpus = [0, 3, 33]
+    assert irq.mask_to_cpus(irq.normalize_affinity(irq.cpus_to_mask_str(cpus))) == cpus
+
+
 def test_parse_interrupts_default_filters(interrupts_file: Path) -> None:
     pairs = list(irq.parse_interrupts(interrupts_file, irq.DEFAULT_FILTERS))
     assert pairs == [
@@ -96,6 +107,19 @@ def test_read_numa_topology_missing_base(tmp_path: Path) -> None:
     assert irq.read_numa_topology(tmp_path / "absent") == {}
 
 
+def test_irq_numa_node(tmp_path: Path) -> None:
+    (tmp_path / "45").mkdir()
+    (tmp_path / "45" / "node").write_text("1\n")
+    assert irq.irq_numa_node(45, tmp_path) == 1
+
+
+def test_irq_numa_node_negative_and_missing(tmp_path: Path) -> None:
+    (tmp_path / "46").mkdir()
+    (tmp_path / "46" / "node").write_text("-1\n")
+    assert irq.irq_numa_node(46, tmp_path) is None
+    assert irq.irq_numa_node(99, tmp_path) is None
+
+
 def test_device_numa_node(tmp_path: Path) -> None:
     dev = tmp_path / "eth0" / "device"
     dev.mkdir(parents=True)
@@ -103,47 +127,58 @@ def test_device_numa_node(tmp_path: Path) -> None:
     assert irq.device_numa_node("eth0", tmp_path) == 1
 
 
-def test_device_numa_node_negative_is_none(tmp_path: Path) -> None:
+def test_device_numa_node_negative_and_missing(tmp_path: Path) -> None:
     dev = tmp_path / "eth0" / "device"
     dev.mkdir(parents=True)
     (dev / "numa_node").write_text("-1\n")
     assert irq.device_numa_node("eth0", tmp_path) is None
-
-
-def test_device_numa_node_missing_is_none(tmp_path: Path) -> None:
     assert irq.device_numa_node("megasas0", tmp_path) is None
 
 
 # --- planning ---------------------------------------------------------------
 
 
-def test_plan_assignments_numa_aware() -> None:
+def test_plan_assignments_numa_aware_per_irq() -> None:
     grouped = {"eth0": [45, 46, 47]}
     topology = {0: [0, 1], 1: [2, 3]}
-    device_nodes = {"eth0": 0}
-    plan = irq.plan_assignments(grouped, topology, device_nodes, [0, 1, 2, 3], numa=True)
-    # Three IRQs round-robin over node 0's CPUs [0, 1].
+    irq_nodes = {45: 0, 46: 0, 47: 0}
+    plan = irq.plan_assignments(grouped, topology, irq_nodes, [0, 1, 2, 3], numa=True)
+    # Three IRQs on node 0 round-robin over its CPUs [0, 1].
     assert plan == {45: [0], 46: [1], 47: [0]}
+
+
+def test_plan_assignments_mixed_nodes() -> None:
+    grouped = {"eth0": [45, 46, 47, 48]}
+    topology = {0: [0, 1], 1: [2, 3]}
+    irq_nodes = {45: 0, 46: 1, 47: 0, 48: 1}
+    plan = irq.plan_assignments(grouped, topology, irq_nodes, [0, 1, 2, 3], numa=True)
+    # node 0 bucket [45, 47] -> [0, 1]; node 1 bucket [46, 48] -> [2, 3].
+    assert plan == {45: [0], 47: [1], 46: [2], 48: [3]}
 
 
 def test_plan_assignments_unknown_node_uses_all_cpus() -> None:
     grouped = {"megasas0": [60, 61]}
     topology = {0: [0, 1], 1: [2, 3]}
-    device_nodes = {"megasas0": None}
-    plan = irq.plan_assignments(grouped, topology, device_nodes, [0, 1, 2, 3], numa=True)
+    irq_nodes = {60: None, 61: None}
+    plan = irq.plan_assignments(grouped, topology, irq_nodes, [0, 1, 2, 3], numa=True)
     assert plan == {60: [0], 61: [1]}
 
 
 def test_plan_assignments_no_numa() -> None:
     grouped = {"eth0": [45, 46, 47]}
     topology = {0: [0, 1]}
-    device_nodes = {"eth0": 0}
-    plan = irq.plan_assignments(grouped, topology, device_nodes, [0, 1, 2, 3], numa=False)
-    # NUMA disabled: spread over all CPUs.
+    irq_nodes = {45: 0, 46: 0, 47: 0}
+    plan = irq.plan_assignments(grouped, topology, irq_nodes, [0, 1, 2, 3], numa=False)
     assert plan == {45: [0], 46: [1], 47: [2]}
 
 
-# --- apply ------------------------------------------------------------------
+def test_device_cpus_prefers_known_node() -> None:
+    topology = {0: [0, 1], 1: [2, 3]}
+    assert irq.device_cpus([45, 46], topology, {45: None, 46: 1}, [0, 1, 2, 3]) == [2, 3]
+    assert irq.device_cpus([60], topology, {60: None}, [0, 1, 2, 3]) == [0, 1, 2, 3]
+
+
+# --- apply (IRQ affinity) ---------------------------------------------------
 
 
 def test_apply_dry_run_makes_no_writes(monkeypatch, capsys) -> None:
@@ -151,8 +186,7 @@ def test_apply_dry_run_makes_no_writes(monkeypatch, capsys) -> None:
     monkeypatch.setattr(irq, "read_current_cpus", lambda _irq: set())
     monkeypatch.setattr(irq, "read_affinity_hint", lambda _irq: set())
 
-    plan = {45: [0], 46: [1]}
-    errors = irq.apply_assignments({"eth0": [45, 46]}, plan, dry_run=True)
+    errors = irq.apply_assignments({"eth0": [45, 46]}, {45: [0], 46: [1]}, dry_run=True)
     assert errors == 0
     assert "dry-run" in capsys.readouterr().out
 
@@ -162,14 +196,12 @@ def test_apply_skips_when_already_set(monkeypatch, capsys) -> None:
     monkeypatch.setattr(irq, "read_current_cpus", lambda n: {0 if n == 45 else 1})
     monkeypatch.setattr(irq, "write_affinity_list", lambda *a: pytest.fail("no write"))
 
-    plan = {45: [0], 46: [1]}
-    errors = irq.apply_assignments({"eth0": [45, 46]}, plan, dry_run=False)
+    errors = irq.apply_assignments({"eth0": [45, 46]}, {45: [0], 46: [1]}, dry_run=False)
     assert errors == 0
     assert "already set" in capsys.readouterr().out
 
 
 def test_apply_respects_driver_hint(monkeypatch, capsys) -> None:
-    # Driver hint points elsewhere than our plan -> we must not override.
     monkeypatch.setattr(irq, "read_affinity_hint", lambda _irq: {2})
     monkeypatch.setattr(irq, "read_current_cpus", lambda _irq: set())
     monkeypatch.setattr(irq, "write_affinity_list", lambda *a: pytest.fail("no write"))
@@ -179,7 +211,7 @@ def test_apply_respects_driver_hint(monkeypatch, capsys) -> None:
     assert "driver hint" in capsys.readouterr().out
 
 
-def test_apply_ignore_hints_writes(monkeypatch, capsys) -> None:
+def test_apply_ignore_hints_writes(monkeypatch) -> None:
     writes = []
     monkeypatch.setattr(irq, "read_affinity_hint", lambda _irq: {2})
     monkeypatch.setattr(irq, "read_current_cpus", lambda _irq: set())
@@ -204,6 +236,52 @@ def test_apply_counts_os_errors(monkeypatch, capsys) -> None:
     assert "FAIL" in capsys.readouterr().err
 
 
+# --- apply (RPS/XPS) --------------------------------------------------------
+
+
+def _make_net_device(tmp_path: Path, name: str, rx: int, tx: int) -> Path:
+    queues = tmp_path / name / "queues"
+    for i in range(rx):
+        d = queues / f"rx-{i}"
+        d.mkdir(parents=True)
+        (d / "rps_cpus").write_text("0")
+    for i in range(tx):
+        d = queues / f"tx-{i}"
+        d.mkdir(parents=True)
+        (d / "xps_cpus").write_text("0")
+    return tmp_path
+
+
+def test_list_queue_affinity_files(tmp_path: Path) -> None:
+    base = _make_net_device(tmp_path, "eth0", rx=2, tx=1)
+    files = irq.list_queue_affinity_files("eth0", base)
+    names = [f"{p.parent.name}/{p.name}" for p in files]
+    assert names == ["rx-0/rps_cpus", "rx-1/rps_cpus", "tx-0/xps_cpus"]
+
+
+def test_list_queue_affinity_files_non_network(tmp_path: Path) -> None:
+    assert irq.list_queue_affinity_files("megasas0", tmp_path) == []
+
+
+def test_apply_rps_writes_node_mask(tmp_path: Path) -> None:
+    base = _make_net_device(tmp_path, "eth0", rx=2, tx=1)
+    errors = irq.apply_rps("eth0", [0, 1], dry_run=False, sys_class_net=base)
+    assert errors == 0
+    assert (base / "eth0" / "queues" / "rx-0" / "rps_cpus").read_text() == "00000003"
+    assert (base / "eth0" / "queues" / "tx-0" / "xps_cpus").read_text() == "00000003"
+
+
+def test_apply_rps_dry_run(tmp_path: Path) -> None:
+    base = _make_net_device(tmp_path, "eth0", rx=1, tx=0)
+    irq.apply_rps("eth0", [0, 1], dry_run=True, sys_class_net=base)
+    # Unchanged in dry-run.
+    assert (base / "eth0" / "queues" / "rx-0" / "rps_cpus").read_text() == "0"
+
+
+def test_apply_rps_no_queues_is_noop(tmp_path: Path) -> None:
+    assert irq.apply_rps("megasas0", [0, 1], sys_class_net=tmp_path) == 0
+
+
 # --- CLI --------------------------------------------------------------------
 
 
@@ -213,11 +291,15 @@ def test_parse_args_defaults() -> None:
     assert args.dry_run is False
     assert args.no_numa is False
     assert args.ignore_hints is False
+    assert args.rps is False
 
 
 def test_parse_args_flags() -> None:
-    args = irq.parse_args(["-f", "eth", "-f", "nvme", "--dry-run", "--no-numa", "--ignore-hints"])
+    args = irq.parse_args(
+        ["-f", "eth", "-f", "nvme", "--dry-run", "--no-numa", "--ignore-hints", "--rps"]
+    )
     assert args.filter == ["eth", "nvme"]
     assert args.dry_run is True
     assert args.no_numa is True
     assert args.ignore_hints is True
+    assert args.rps is True

@@ -1,0 +1,18 @@
+[Unit]
+Description=NUMA-aware IRQ affinity (irq_affinity)
+Documentation=https://github.com/MaksimShchuplov/irq_affinity
+# IRQ affinity resets on reboot, driver reload, and device hotplug; run late
+# so NICs and their queues exist.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Adjust the path and flags to your install. --no-color keeps the journal clean.
+ExecStart=/usr/bin/env python3 /opt/irq_affinity/irq.py --no-color
+# Example with software steering and custom filters:
+# ExecStart=/usr/bin/env python3 /opt/irq_affinity/irq.py --no-color --rps -f mlx5 -f nvme
+
+[Install]
+WantedBy=multi-user.target
