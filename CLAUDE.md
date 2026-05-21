@@ -6,30 +6,36 @@ Guidance for Claude Code (and other AI assistants) working in this repository.
 
 `irq_affinity` is a small Linux sysadmin utility that pins hardware IRQs
 (Intel 10G NICs, LSI MegaRAID controllers, and anything else you filter on)
-to specific CPU cores by writing `/proc/irq/<n>/smp_affinity`. It is a
-replacement for `irqbalance` on older systems where the daemon misbehaves.
+to CPU cores by writing `/proc/irq/<n>/smp_affinity_list`. It is NUMA-aware
+and respects the driver/kernel `affinity_hint`, which matters for
+latency/throughput-sensitive workloads: HFT, telecom/NFV, and AI/ML
+clusters (NUMA locality + RDMA/NCCL network tuning). It started life as a
+round-robin replacement for `irqbalance` on old systems.
 
 - Entry point: `irq.py` (`main()` returns an exit code).
 - Runtime: Python 3.8+ stdlib only. No third-party dependencies.
-- Target OS: Linux (reads `/proc/interrupts`, writes `/proc/irq/*/smp_affinity`).
+- Target OS: Linux (`/proc/interrupts`, `/proc/irq`, `/sys/devices/system/node`).
 - Privileges: writes to `/proc/irq/*` require root. The script warns if not root.
 
 ## Layout
 
 ```
 irq.py            # CLI entry point and library functions
-tests/test_irq.py # pytest-based unit tests (use synthetic /proc/interrupts)
+tests/test_irq.py # pytest unit tests (synthetic /proc and /sys via tmp_path)
 README.md         # user docs
 LICENSE           # MIT
 requirements-dev.txt
+pyproject.toml    # ruff + pytest config
 ```
 
 ## How to run
 
 ```bash
-python3 irq.py --dry-run                  # see what it would do
+python3 irq.py --dry-run                  # show the NUMA-aware plan
 sudo python3 irq.py                       # apply affinities
-sudo python3 irq.py -f eth -f nvme        # custom filters
+sudo python3 irq.py -f mlx5 -f nvme       # custom filters
+sudo python3 irq.py --no-numa             # plain round-robin over all CPUs
+sudo python3 irq.py --ignore-hints        # override managed-IRQ hints
 sudo python3 irq.py --keep-irqbalance     # do not stop irqbalance
 ```
 
@@ -37,13 +43,17 @@ sudo python3 irq.py --keep-irqbalance     # do not stop irqbalance
 
 ```bash
 python3 -m pytest -q
+ruff check . && ruff format --check .
 ```
 
-Tests never touch real `/proc/irq`. They feed fake interrupts text through
-`parse_interrupts` and assert on the grouping / mask generation helpers.
-If you add code that writes to `/proc/irq`, wrap it behind a dependency so
-tests can stub it out (see how `read_current_affinity` / `write_affinity`
-are isolated in small functions).
+Tests never touch real `/proc` or `/sys`. Pure helpers (`parse_cpu_list`,
+`format_cpu_list`, `normalize_affinity`, `mask_to_cpus`, `parse_interrupts`,
+`group_irqs_by_device`, `plan_assignments`) are tested directly; topology
+readers (`read_numa_topology`, `device_numa_node`) take a base-path arg so
+they can be pointed at a `tmp_path`; the I/O in `apply_assignments` is
+exercised by monkeypatching `read_current_cpus` / `read_affinity_hint` /
+`write_affinity_list`. Keep new sysfs/procfs access behind small functions
+so this stays possible.
 
 ## Conventions
 
@@ -58,15 +68,21 @@ are isolated in small functions).
 
 ## Things to be careful about
 
-- Affinity masks are CPU-count dependent. Use `build_affinity_masks()`; do
-  not hard-code the hex list (the original script had gaps and an
-  out-of-order entry at CPU 26/27).
+- Write CPU *numbers* to `smp_affinity_list`, not hex masks to
+  `smp_affinity`. The hex mask is comma-grouped into 32-bit words above 32
+  CPUs; `parse_cpu_list` / `format_cpu_list` avoid that class of bug.
+  `normalize_affinity` exists only to read the hex `affinity_hint`.
+- Default behaviour respects the driver `affinity_hint` (managed IRQs).
+  Only override it behind `--ignore-hints`; silently fighting the kernel's
+  managed-IRQ placement causes write failures (EIO) and worse locality.
+- NUMA node resolution is best-effort: network devices via
+  `/sys/class/net/<dev>/device/numa_node`, everything else falls back to
+  all CPUs. Add lookups, don't assume a node.
 - `/proc/interrupts` varies across kernels. The parser skips the header
   line and requires a numeric IRQ prefix — add new filters, not new
   parsers, when possible.
-- `killall irqbalance` is a last resort. Prefer `systemctl stop
-  irqbalance` when available; only fall back to killall if systemd is
-  absent.
+- Stopping irqbalance: prefer `systemctl stop irqbalance`, fall back to
+  `killall` only when systemd is absent.
 
 ## Git workflow for AI sessions
 
