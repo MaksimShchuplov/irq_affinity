@@ -26,9 +26,11 @@ decide the numbers.
 - **CPU-list writes.** Uses `smp_affinity_list` (CPU numbers), so it works
   unchanged on machines with more than 32 CPUs, where the hex-mask format
   is comma-grouped.
-- **Optional RPS/XPS steering.** `--rps` points each NIC's RX/TX queue
-  software steering (`rps_cpus` / `xps_cpus`) at the same NUMA node, so the
-  receive/transmit softirq work stays local too.
+- **Optional RPS/XPS steering.** `--rps` keeps each NIC's queue softirq work
+  on the device's NUMA node: RX (`rps_cpus`) gets the whole node mask so the
+  kernel hashes flows across local cores, while each TX queue (`xps_cpus`)
+  is pinned to one node core round-robin (canonical XPS, avoids lock
+  contention).
 
 ## Requirements
 
@@ -78,8 +80,9 @@ Run `python3 irq.py --help` for the full option list.
    `--ignore-hints`), skip if already correct, otherwise write the CPU to
    `smp_affinity_list`. Write failures are counted and produce a non-zero
    exit code.
-7. With `--rps`, write each NIC's NUMA-node CPU mask to every
-   `queues/rx-*/rps_cpus` and `queues/tx-*/xps_cpus`.
+7. With `--rps`, set every `queues/rx-*/rps_cpus` to the NIC's full
+   NUMA-node mask, and pin each `queues/tx-*/xps_cpus` to one node core
+   round-robin.
 
 ## Persisting across reboots
 

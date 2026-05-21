@@ -285,23 +285,30 @@ def _make_net_device(tmp_path: Path, name: str, rx: int, tx: int) -> Path:
     return tmp_path
 
 
-def test_list_queue_affinity_files(tmp_path: Path) -> None:
-    base = _make_net_device(tmp_path, "eth0", rx=2, tx=1)
-    files = irq.list_queue_affinity_files("eth0", base)
-    names = [f"{p.parent.name}/{p.name}" for p in files]
-    assert names == ["rx-0/rps_cpus", "rx-1/rps_cpus", "tx-0/xps_cpus"]
+def test_list_queue_files_sorted_numerically(tmp_path: Path) -> None:
+    base = _make_net_device(tmp_path, "eth0", rx=12, tx=1)
+    rx = irq.list_queue_files("eth0", "rx", base)
+    assert [p.parent.name for p in rx][:3] == ["rx-0", "rx-1", "rx-2"]
+    # rx-10/rx-11 must sort after rx-9, not lexically after rx-1.
+    assert rx[-1].parent.name == "rx-11"
 
 
-def test_list_queue_affinity_files_non_network(tmp_path: Path) -> None:
-    assert irq.list_queue_affinity_files("megasas0", tmp_path) == []
+def test_list_queue_files_non_network(tmp_path: Path) -> None:
+    assert irq.list_queue_files("megasas0", "rx", tmp_path) == []
 
 
-def test_apply_rps_writes_node_mask(tmp_path: Path) -> None:
-    base = _make_net_device(tmp_path, "eth0", rx=2, tx=1)
-    errors = irq.apply_rps("eth0", [0, 1], dry_run=False, sys_class_net=base)
+def test_apply_rps_hybrid_layout(tmp_path: Path) -> None:
+    base = _make_net_device(tmp_path, "eth0", rx=2, tx=3)
+    errors = irq.apply_rps("eth0", [4, 5], dry_run=False, sys_class_net=base)
     assert errors == 0
-    assert (base / "eth0" / "queues" / "rx-0" / "rps_cpus").read_text() == "00000003"
-    assert (base / "eth0" / "queues" / "tx-0" / "xps_cpus").read_text() == "00000003"
+    q = base / "eth0" / "queues"
+    # RX: whole node mask on every rx queue (cpus 4,5 -> bits -> 0x30).
+    assert (q / "rx-0" / "rps_cpus").read_text() == "00000030"
+    assert (q / "rx-1" / "rps_cpus").read_text() == "00000030"
+    # TX: one node CPU per queue, round-robin (4, 5, 4).
+    assert (q / "tx-0" / "xps_cpus").read_text() == "00000010"
+    assert (q / "tx-1" / "xps_cpus").read_text() == "00000020"
+    assert (q / "tx-2" / "xps_cpus").read_text() == "00000010"
 
 
 def test_apply_rps_dry_run(tmp_path: Path) -> None:

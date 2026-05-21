@@ -51,9 +51,9 @@ Tests never touch real `/proc` or `/sys`. Pure helpers (`parse_cpu_list`,
 `format_cpu_list`, `normalize_affinity`, `mask_to_cpus`, `cpus_to_mask_str`,
 `parse_interrupts`, `group_irqs_by_device`, `plan_assignments`,
 `device_cpus`) are tested directly; topology/queue readers
-(`read_numa_topology`, `irq_numa_node`, `device_numa_node`,
-`list_queue_affinity_files`, `apply_rps`) take a base-path arg so they can be
-pointed at a `tmp_path`; the I/O in `apply_assignments` is exercised by
+(`read_numa_topology`, `irq_numa_node`, `pci_irq_numa_node`,
+`device_numa_node`, `list_queue_files`, `apply_rps`) take a base-path arg so
+they can be pointed at a `tmp_path`; the I/O in `apply_assignments` is exercised by
 monkeypatching `read_current_cpus` / `read_affinity_hint` /
 `write_affinity_list`. Keep new sysfs/procfs access behind small functions
 so this stays possible.
@@ -85,7 +85,10 @@ so this stays possible.
   assume a node.
 - RPS/XPS (`--rps`) writes a hex mask (`cpus_to_mask_str`) to
   `queues/{rx-*/rps_cpus,tx-*/xps_cpus}` — these files take masks, not CPU
-  lists, unlike `smp_affinity_list`. It only applies to network devices.
+  lists, unlike `smp_affinity_list`. Only network devices have these.
+  Policy: RX queues get the full node mask; TX queues are pinned one core
+  each, round-robin. `list_queue_files` sorts by numeric queue index, not
+  lexically (rx-10 must follow rx-9).
 - `/proc/interrupts` varies across kernels. The parser skips the header
   line and requires a numeric IRQ prefix — add new filters, not new
   parsers, when possible.

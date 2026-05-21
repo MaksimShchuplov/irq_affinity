@@ -286,45 +286,52 @@ def write_affinity_list(irq: int, cpus) -> None:
     path.write_text(format_cpu_list(cpus))
 
 
-def list_queue_affinity_files(device: str, sys_class_net: Path = SYS_CLASS_NET) -> list:
-    """Return the rps_cpus (rx) and xps_cpus (tx) files of a network device."""
+def _queue_index(path: Path) -> int:
+    match = re.search(r"-(\d+)$", path.parent.name)
+    return int(match.group(1)) if match else 0
+
+
+def list_queue_files(device: str, kind: str, sys_class_net: Path = SYS_CLASS_NET) -> list:
+    """Return a network device's queue steering files, sorted by queue index.
+
+    ``kind`` is "rx" (rps_cpus) or "tx" (xps_cpus).
+    """
     base = sys_class_net / device / "queues"
     if not base.exists():
         return []
-    files = []
-    for queue in sorted(base.glob("rx-*")):
-        rps = queue / "rps_cpus"
-        if rps.exists():
-            files.append(rps)
-    for queue in sorted(base.glob("tx-*")):
-        xps = queue / "xps_cpus"
-        if xps.exists():
-            files.append(xps)
-    return files
+    prefix, fname = ("rx-", "rps_cpus") if kind == "rx" else ("tx-", "xps_cpus")
+    files = [q / fname for q in base.glob(prefix + "*") if (q / fname).exists()]
+    return sorted(files, key=_queue_index)
+
+
+def _write_queue_mask(path: Path, cpus, dry_run: bool) -> int:
+    label = f"  {path.parent.parent.parent.name} {path.parent.name}/{path.name} -> cpu {format_cpu_list(cpus)}"
+    try:
+        if dry_run:
+            print(f"{label}................{Colors.WARNING}[dry-run]{Colors.ENDC}")
+            return 0
+        path.write_text(cpus_to_mask_str(cpus))
+        print(f"{label}................{Colors.OKGREEN}[OK!]{Colors.ENDC}")
+        return 0
+    except OSError as exc:
+        print(f"{label}................{Colors.FAIL}[FAIL: {exc}]{Colors.ENDC}", file=sys.stderr)
+        return 1
 
 
 def apply_rps(device: str, cpus, dry_run=False, sys_class_net: Path = SYS_CLASS_NET) -> int:
-    """Point every RX/TX queue of ``device`` at ``cpus`` via rps/xps. Returns failures."""
-    files = list_queue_affinity_files(device, sys_class_net)
-    if not files:
+    """Steer a network device's RX/TX queues onto ``cpus``. Returns failures.
+
+    RX (rps_cpus) gets the whole NUMA-node mask so the kernel hashes flows
+    across the local cores; TX (xps_cpus) pins each queue to a single node
+    core round-robin, the canonical XPS layout that avoids lock contention.
+    """
+    if not cpus:
         return 0
-    mask = cpus_to_mask_str(cpus)
-    target = format_cpu_list(cpus)
     errors = 0
-    for path in files:
-        label = f"  {device} {path.parent.name}/{path.name} -> cpu {target}"
-        try:
-            if dry_run:
-                print(f"{label}................{Colors.WARNING}[dry-run]{Colors.ENDC}")
-                continue
-            path.write_text(mask)
-            print(f"{label}................{Colors.OKGREEN}[OK!]{Colors.ENDC}")
-        except OSError as exc:
-            errors += 1
-            print(
-                f"{label}................{Colors.FAIL}[FAIL: {exc}]{Colors.ENDC}",
-                file=sys.stderr,
-            )
+    for path in list_queue_files(device, "rx", sys_class_net):
+        errors += _write_queue_mask(path, cpus, dry_run)
+    for index, path in enumerate(list_queue_files(device, "tx", sys_class_net)):
+        errors += _write_queue_mask(path, [cpus[index % len(cpus)]], dry_run)
     return errors
 
 
