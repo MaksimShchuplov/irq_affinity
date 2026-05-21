@@ -14,9 +14,11 @@ decide the numbers.
 ## Why this instead of round-robin
 
 - **NUMA-aware, per IRQ.** Each IRQ's NUMA node is read from
-  `/proc/irq/<n>/node` (works for any PCI device, not just NICs), so
-  interrupt handling stays local to the cores that touch the data — no
-  cross-socket bouncing for RDMA/NCCL or 10G+ traffic.
+  `/proc/irq/<n>/node`, falling back to a PCI reverse-map
+  (`/sys/bus/pci/devices/<addr>/msi_irqs/<n>` → that device's `numa_node`),
+  so it works for any device — NICs, MegaRAID, NVMe, GPUs. Interrupt
+  handling stays local to the cores that touch the data, no cross-socket
+  bouncing for RDMA/NCCL or 10G+ traffic.
 - **Respects managed IRQs.** Modern multi-queue NICs publish an
   `affinity_hint`; the tool honours it instead of fighting the kernel's
   managed-IRQ logic. Override with `--ignore-hints` when you really know
@@ -67,7 +69,8 @@ Run `python3 irq.py --help` for the full option list.
 2. Match `/proc/interrupts` lines against the filters and group IRQs by
    device.
 3. Resolve each IRQ's NUMA node from `/proc/irq/<n>/node`, falling back to
-   the network device's `numa_node`, then to all CPUs.
+   the owning PCI device's `numa_node` (via `msi_irqs`/`irq`), then to a
+   network device's `numa_node`, then to all CPUs.
 4. Plan one CPU per IRQ, round-robin within its NUMA node.
 5. Stop `irqbalance` (`systemctl stop`, else `killall`) unless
    `--keep-irqbalance` is set.

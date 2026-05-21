@@ -78,10 +78,11 @@ so this stays possible.
 - Default behaviour respects the driver `affinity_hint` (managed IRQs).
   Only override it behind `--ignore-hints`; silently fighting the kernel's
   managed-IRQ placement causes write failures (EIO) and worse locality.
-- NUMA node resolution is best-effort and per-IRQ: prefer
-  `/proc/irq/<n>/node` (any device), fall back to a NIC's
-  `/sys/class/net/<dev>/device/numa_node`, then to all CPUs. Add lookups,
-  don't assume a node.
+- NUMA node resolution is best-effort and per-IRQ, in order:
+  `/proc/irq/<n>/node` → PCI reverse-map (`pci_irq_numa_node`, scans
+  `/sys/bus/pci/devices/*/msi_irqs/<n>` and legacy `irq`) → a NIC's
+  `/sys/class/net/<dev>/device/numa_node` → all CPUs. Add lookups, don't
+  assume a node.
 - RPS/XPS (`--rps`) writes a hex mask (`cpus_to_mask_str`) to
   `queues/{rx-*/rps_cpus,tx-*/xps_cpus}` — these files take masks, not CPU
   lists, unlike `smp_affinity_list`. It only applies to network devices.

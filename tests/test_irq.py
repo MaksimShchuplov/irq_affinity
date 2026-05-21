@@ -120,6 +120,39 @@ def test_irq_numa_node_negative_and_missing(tmp_path: Path) -> None:
     assert irq.irq_numa_node(99, tmp_path) is None
 
 
+def test_pci_irq_numa_node_msi(tmp_path: Path) -> None:
+    dev = tmp_path / "0000:01:00.0"
+    (dev / "msi_irqs" / "45").mkdir(parents=True)
+    (dev / "numa_node").write_text("1\n")
+    assert irq.pci_irq_numa_node(45, tmp_path) == 1
+
+
+def test_pci_irq_numa_node_legacy_irq_file(tmp_path: Path) -> None:
+    dev = tmp_path / "0000:02:00.0"
+    dev.mkdir()
+    (dev / "irq").write_text("60\n")
+    (dev / "numa_node").write_text("0\n")
+    assert irq.pci_irq_numa_node(60, tmp_path) == 0
+
+
+def test_pci_irq_numa_node_negative_is_none(tmp_path: Path) -> None:
+    dev = tmp_path / "0000:03:00.0"
+    (dev / "msi_irqs" / "70").mkdir(parents=True)
+    (dev / "numa_node").write_text("-1\n")
+    assert irq.pci_irq_numa_node(70, tmp_path) is None
+
+
+def test_pci_irq_numa_node_not_found(tmp_path: Path) -> None:
+    dev = tmp_path / "0000:04:00.0"
+    (dev / "msi_irqs" / "10").mkdir(parents=True)
+    (dev / "numa_node").write_text("0\n")
+    assert irq.pci_irq_numa_node(999, tmp_path) is None
+
+
+def test_pci_irq_numa_node_missing_base(tmp_path: Path) -> None:
+    assert irq.pci_irq_numa_node(45, tmp_path / "absent") is None
+
+
 def test_device_numa_node(tmp_path: Path) -> None:
     dev = tmp_path / "eth0" / "device"
     dev.mkdir(parents=True)

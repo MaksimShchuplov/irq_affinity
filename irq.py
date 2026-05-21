@@ -32,6 +32,7 @@ PROC_INTERRUPTS = Path("/proc/interrupts")
 PROC_IRQ = Path("/proc/irq")
 SYS_NODE = Path("/sys/devices/system/node")
 SYS_CLASS_NET = Path("/sys/class/net")
+SYS_PCI_DEVICES = Path("/sys/bus/pci/devices")
 
 
 class Colors:
@@ -187,10 +188,39 @@ def irq_numa_node(irq: int, proc_irq: Path = PROC_IRQ):
     return node if node >= 0 else None
 
 
+def pci_irq_numa_node(irq: int, pci_devices: Path = SYS_PCI_DEVICES):
+    """NUMA node of the PCI device that owns ``irq``, or None.
+
+    Reverse-maps the IRQ to its owning device via
+    /sys/bus/pci/devices/<addr>/msi_irqs/<n> (MSI/MSI-X) or the legacy
+    <addr>/irq file, then reads that device's numa_node. Works for any PCI
+    device (megasas, NVMe, GPUs) when /proc/irq/<n>/node is unavailable.
+    """
+    if not pci_devices.exists():
+        return None
+    irq_s = str(irq)
+    for dev in sorted(pci_devices.iterdir()):
+        owns = (dev / "msi_irqs" / irq_s).exists()
+        if not owns:
+            try:
+                owns = (dev / "irq").read_text().strip() == irq_s
+            except OSError:
+                owns = False
+        if not owns:
+            continue
+        try:
+            node = int((dev / "numa_node").read_text())
+        except (OSError, ValueError):
+            return None
+        return node if node >= 0 else None
+    return None
+
+
 def device_numa_node(device: str, sys_class_net: Path = SYS_CLASS_NET):
     """Best-effort NUMA node for a network device, or None if unknown.
 
-    Used only as a fallback when /proc/irq/<n>/node is unavailable.
+    Used as a fallback when neither /proc/irq/<n>/node nor the PCI
+    reverse-map yields a node.
     """
     try:
         node = int((sys_class_net / device / "device" / "numa_node").read_text())
@@ -438,7 +468,11 @@ def main(argv=None) -> int:
         net_fallback = device_numa_node(device)
         for irq in irqs:
             node = irq_numa_node(irq)
-            irq_nodes[irq] = node if node is not None else net_fallback
+            if node is None:
+                node = pci_irq_numa_node(irq)
+            if node is None:
+                node = net_fallback
+            irq_nodes[irq] = node
 
     numa = not args.no_numa and bool(topology)
     print(f"cpus: {len(all_cpus)}  numa nodes: {len(topology)}  numa-aware: {numa}")
