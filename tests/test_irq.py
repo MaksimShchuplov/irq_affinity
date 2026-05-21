@@ -107,6 +107,45 @@ def test_read_numa_topology_missing_base(tmp_path: Path) -> None:
     assert irq.read_numa_topology(tmp_path / "absent") == {}
 
 
+def test_read_isolated_cpus(tmp_path: Path) -> None:
+    (tmp_path / "isolated").write_text("2-3\n")
+    (tmp_path / "nohz_full").write_text("3,5\n")
+    assert irq.read_isolated_cpus(tmp_path) == {2, 3, 5}
+
+
+def test_read_isolated_cpus_empty_and_missing(tmp_path: Path) -> None:
+    (tmp_path / "isolated").write_text("\n")
+    assert irq.read_isolated_cpus(tmp_path) == set()
+    assert irq.read_isolated_cpus(tmp_path / "absent") == set()
+
+
+def test_read_isolated_cpus_ignores_garbage(tmp_path: Path) -> None:
+    (tmp_path / "nohz_full").write_text("(null)\n")
+    assert irq.read_isolated_cpus(tmp_path) == set()
+
+
+def test_filter_isolated_drops_cores() -> None:
+    topology = {0: [0, 1, 2, 3], 1: [4, 5, 6, 7]}
+    filtered, all_cpus = irq.filter_isolated(topology, list(range(8)), {2, 3})
+    assert filtered == {0: [0, 1], 1: [4, 5, 6, 7]}
+    assert all_cpus == [0, 1, 4, 5, 6, 7]
+
+
+def test_filter_isolated_keeps_node_when_all_isolated() -> None:
+    topology = {0: [0, 1], 1: [2, 3]}
+    filtered, all_cpus = irq.filter_isolated(topology, [0, 1, 2, 3], {0, 1})
+    # Node 0 would be emptied; keep its CPUs rather than strand its IRQs.
+    assert filtered == {0: [0, 1], 1: [2, 3]}
+    assert all_cpus == [2, 3]
+
+
+def test_filter_isolated_noop_without_isolated() -> None:
+    topology = {0: [0, 1]}
+    filtered, all_cpus = irq.filter_isolated(topology, [0, 1], set())
+    assert filtered == topology
+    assert all_cpus == [0, 1]
+
+
 def test_irq_numa_node(tmp_path: Path) -> None:
     (tmp_path / "45").mkdir()
     (tmp_path / "45" / "node").write_text("1\n")
@@ -269,6 +308,38 @@ def test_apply_counts_os_errors(monkeypatch, capsys) -> None:
     assert "FAIL" in capsys.readouterr().err
 
 
+# --- verify -----------------------------------------------------------------
+
+
+def test_verify_reports_no_drift(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(irq, "read_current_cpus", lambda n: {0 if n == 45 else 1})
+    monkeypatch.setattr(irq, "read_affinity_hint", lambda _irq: set())
+    drift = irq.verify_assignments({"eth0": [45, 46]}, {45: [0], 46: [1]}, {45: 0, 46: 0})
+    assert drift == 0
+    out = capsys.readouterr().out
+    assert "STATUS" in out
+    assert "drift" not in out
+
+
+def test_verify_counts_drift(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(irq, "read_current_cpus", lambda _irq: {3})
+    monkeypatch.setattr(irq, "read_affinity_hint", lambda _irq: set())
+    drift = irq.verify_assignments({"eth0": [45, 46]}, {45: [0], 46: [1]}, {45: 0, 46: 1})
+    assert drift == 2
+    assert "drift" in capsys.readouterr().out
+
+
+def test_verify_handles_read_error(monkeypatch, capsys) -> None:
+    def boom(_irq):
+        raise OSError("no such irq")
+
+    monkeypatch.setattr(irq, "read_current_cpus", boom)
+    monkeypatch.setattr(irq, "read_affinity_hint", lambda _irq: set())
+    drift = irq.verify_assignments({"eth0": [45]}, {45: [0]}, {45: None})
+    assert drift == 1
+    assert "error" in capsys.readouterr().out
+
+
 # --- apply (RPS/XPS) --------------------------------------------------------
 
 
@@ -332,14 +403,29 @@ def test_parse_args_defaults() -> None:
     assert args.no_numa is False
     assert args.ignore_hints is False
     assert args.rps is False
+    assert args.verify is False
+    assert args.use_isolated is False
 
 
 def test_parse_args_flags() -> None:
     args = irq.parse_args(
-        ["-f", "eth", "-f", "nvme", "--dry-run", "--no-numa", "--ignore-hints", "--rps"]
+        [
+            "-f",
+            "eth",
+            "-f",
+            "nvme",
+            "--dry-run",
+            "--no-numa",
+            "--ignore-hints",
+            "--rps",
+            "--verify",
+            "--use-isolated",
+        ]
     )
     assert args.filter == ["eth", "nvme"]
     assert args.dry_run is True
     assert args.no_numa is True
     assert args.ignore_hints is True
     assert args.rps is True
+    assert args.verify is True
+    assert args.use_isolated is True

@@ -33,10 +33,12 @@ pyproject.toml                  # ruff + pytest config
 
 ```bash
 python3 irq.py --dry-run                  # show the NUMA-aware plan
+python3 irq.py --verify                   # read-only audit, non-zero on drift
 sudo python3 irq.py                       # apply affinities
 sudo python3 irq.py -f mlx5 -f nvme       # custom filters
 sudo python3 irq.py --no-numa             # plain round-robin over all CPUs
 sudo python3 irq.py --ignore-hints        # override managed-IRQ hints
+sudo python3 irq.py --use-isolated        # allow isolcpus/nohz_full cores
 sudo python3 irq.py --keep-irqbalance     # do not stop irqbalance
 ```
 
@@ -50,13 +52,13 @@ ruff check . && ruff format --check .
 Tests never touch real `/proc` or `/sys`. Pure helpers (`parse_cpu_list`,
 `format_cpu_list`, `normalize_affinity`, `mask_to_cpus`, `cpus_to_mask_str`,
 `parse_interrupts`, `group_irqs_by_device`, `plan_assignments`,
-`device_cpus`) are tested directly; topology/queue readers
-(`read_numa_topology`, `irq_numa_node`, `pci_irq_numa_node`,
-`device_numa_node`, `list_queue_files`, `apply_rps`) take a base-path arg so
-they can be pointed at a `tmp_path`; the I/O in `apply_assignments` is exercised by
-monkeypatching `read_current_cpus` / `read_affinity_hint` /
-`write_affinity_list`. Keep new sysfs/procfs access behind small functions
-so this stays possible.
+`device_cpus`, `filter_isolated`) are tested directly; topology/queue
+readers (`read_numa_topology`, `read_isolated_cpus`, `irq_numa_node`,
+`pci_irq_numa_node`, `device_numa_node`, `list_queue_files`, `apply_rps`)
+take a base-path arg so they can be pointed at a `tmp_path`; the I/O in
+`apply_assignments` and `verify_assignments` is exercised by monkeypatching
+`read_current_cpus` / `read_affinity_hint` / `write_affinity_list`. Keep new
+sysfs/procfs access behind small functions so this stays possible.
 
 ## Conventions
 
@@ -89,6 +91,12 @@ so this stays possible.
   Policy: RX queues get the full node mask; TX queues are pinned one core
   each, round-robin. `list_queue_files` sorts by numeric queue index, not
   lexically (rx-10 must follow rx-9).
+- Isolated cores (`isolcpus=`/`nohz_full=`, read from
+  `/sys/devices/system/cpu/{isolated,nohz_full}`) are excluded by default
+  via `filter_isolated`; never strand a node with zero CPUs — fall back to
+  its full set. `--use-isolated` opts out.
+- `--verify` is strictly read-only (no writes, no irqbalance stop) and
+  returns the drift count so it can gate CI/monitoring.
 - `/proc/interrupts` varies across kernels. The parser skips the header
   line and requires a numeric IRQ prefix — add new filters, not new
   parsers, when possible.

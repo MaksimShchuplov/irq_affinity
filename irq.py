@@ -25,7 +25,7 @@ import sys
 from pathlib import Path
 
 __author__ = "Maksim Shchuplov shchuplov@gmail.com"
-__version__ = "3.1.0"
+__version__ = "3.2.0"
 
 DEFAULT_FILTERS = ("eth", "megasas")
 PROC_INTERRUPTS = Path("/proc/interrupts")
@@ -33,6 +33,7 @@ PROC_IRQ = Path("/proc/irq")
 SYS_NODE = Path("/sys/devices/system/node")
 SYS_CLASS_NET = Path("/sys/class/net")
 SYS_PCI_DEVICES = Path("/sys/bus/pci/devices")
+SYS_CPU = Path("/sys/devices/system/cpu")
 
 
 class Colors:
@@ -173,6 +174,41 @@ def read_numa_topology(node_base: Path = SYS_NODE) -> dict:
         if cpus:
             topology[int(match.group(1))] = cpus
     return topology
+
+
+def read_isolated_cpus(cpu_base: Path = SYS_CPU) -> set:
+    """CPUs isolated via isolcpus= / nohz_full= boot params.
+
+    Reads /sys/devices/system/cpu/{isolated,nohz_full}. These cores are kept
+    free of device IRQs for latency-sensitive workloads (HFT, NFV, RT).
+    """
+    isolated: set = set()
+    for name in ("isolated", "nohz_full"):
+        try:
+            raw = (cpu_base / name).read_text().strip()
+        except OSError:
+            continue
+        try:
+            isolated.update(parse_cpu_list(raw))
+        except ValueError:
+            continue
+    return isolated
+
+
+def filter_isolated(topology: dict, all_cpus, isolated):
+    """Drop isolated CPUs from the topology and CPU pool.
+
+    If filtering would leave a node (or the whole pool) empty, the original
+    set is kept so IRQs are never stranded with nowhere to go.
+    """
+    if not isolated:
+        return topology, list(all_cpus)
+    filtered = {}
+    for node, cpus in topology.items():
+        kept = [c for c in cpus if c not in isolated]
+        filtered[node] = kept if kept else cpus
+    kept_all = [c for c in all_cpus if c not in isolated]
+    return filtered, (kept_all if kept_all else list(all_cpus))
 
 
 def irq_numa_node(irq: int, proc_irq: Path = PROC_IRQ):
@@ -358,6 +394,42 @@ def stop_irqbalance(dry_run: bool = False) -> None:
         )
 
 
+def verify_assignments(grouped, plan, irq_nodes) -> int:
+    """Print a read-only IRQ -> CPU -> node audit table. Returns drift count.
+
+    "Drift" is any IRQ whose current affinity differs from the plan (or that
+    cannot be read), so the result is suitable as a CI / monitoring gate.
+    """
+    print(
+        f"{'DEVICE':<14} {'IRQ':>5} {'NODE':>4} {'CURRENT':>12} {'PLANNED':>12} {'HINT':>8}  STATUS"
+    )
+    drift = 0
+    for device, irqs in grouped.items():
+        for irq in sorted(irqs):
+            planned = plan[irq]
+            node = irq_nodes.get(irq)
+            node_s = str(node) if node is not None else "-"
+            try:
+                current = read_current_cpus(irq)
+                current_s = format_cpu_list(current) or "-"
+                ok = current == set(planned)
+            except OSError:
+                current_s = "error"
+                ok = False
+            hint = read_affinity_hint(irq)
+            hint_s = format_cpu_list(hint) if hint else "-"
+            status = (
+                f"{Colors.OKGREEN}ok{Colors.ENDC}" if ok else f"{Colors.WARNING}drift{Colors.ENDC}"
+            )
+            if not ok:
+                drift += 1
+            print(
+                f"{device:<14} {irq:>5} {node_s:>4} "
+                f"{current_s:>12} {format_cpu_list(planned):>12} {hint_s:>8}  {status}"
+            )
+    return drift
+
+
 def apply_assignments(grouped, plan, respect_hints=True, dry_run=False) -> int:
     """Write the planned IRQ affinities. Returns the number of failures."""
     errors = 0
@@ -417,6 +489,17 @@ def parse_args(argv=None) -> argparse.Namespace:
         help="Print planned changes without touching the kernel or irqbalance.",
     )
     parser.add_argument(
+        "--verify",
+        action="store_true",
+        help="Read-only audit: print an IRQ->CPU->node table and exit "
+        "non-zero if any affinity has drifted from the plan.",
+    )
+    parser.add_argument(
+        "--use-isolated",
+        action="store_true",
+        help="Allow pinning to isolcpus/nohz_full cores (skipped by default).",
+    )
+    parser.add_argument(
         "--no-numa",
         action="store_true",
         help="Spread IRQs over all CPUs instead of each IRQ's NUMA node.",
@@ -470,6 +553,9 @@ def main(argv=None) -> int:
     if not all_cpus:
         all_cpus = list(range(detect_cpu_count()))
 
+    isolated = set() if args.use_isolated else read_isolated_cpus()
+    topology, all_cpus = filter_isolated(topology, all_cpus, isolated)
+
     irq_nodes: dict = {}
     for device, irqs in grouped.items():
         net_fallback = device_numa_node(device)
@@ -483,8 +569,13 @@ def main(argv=None) -> int:
 
     numa = not args.no_numa and bool(topology)
     print(f"cpus: {len(all_cpus)}  numa nodes: {len(topology)}  numa-aware: {numa}")
+    if isolated:
+        print(f"isolated cpus skipped: {format_cpu_list(isolated)}")
 
     plan = plan_assignments(grouped, topology, irq_nodes, all_cpus, numa=numa)
+
+    if args.verify:
+        return 1 if verify_assignments(grouped, plan, irq_nodes) else 0
 
     if not args.keep_irqbalance:
         stop_irqbalance(dry_run=args.dry_run)

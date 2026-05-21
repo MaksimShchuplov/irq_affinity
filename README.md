@@ -31,6 +31,13 @@ decide the numbers.
   kernel hashes flows across local cores, while each TX queue (`xps_cpus`)
   is pinned to one node core round-robin (canonical XPS, avoids lock
   contention).
+- **Isolated-core aware.** CPUs listed in `isolcpus=`/`nohz_full=`
+  (`/sys/devices/system/cpu/{isolated,nohz_full}`) are kept free of device
+  IRQs by default — exactly what you want when those cores run a pinned RT
+  or HFT thread. Use `--use-isolated` to opt out.
+- **Auditable.** `--verify` is a read-only mode that prints an
+  IRQ→CPU→node table and exits non-zero on any drift, so you can gate it in
+  CI or monitoring.
 
 ## Requirements
 
@@ -59,6 +66,12 @@ sudo python3 irq.py --ignore-hints
 # Plain round-robin over all CPUs (disable NUMA awareness):
 sudo python3 irq.py --no-numa
 
+# Audit only: print the IRQ->CPU->node table, exit non-zero on drift:
+python3 irq.py --verify --no-color
+
+# Permit pinning onto isolcpus/nohz_full cores (off by default):
+sudo python3 irq.py --use-isolated
+
 # Leave irqbalance running / drop colors for logs:
 sudo python3 irq.py --keep-irqbalance --no-color
 ```
@@ -68,19 +81,22 @@ Run `python3 irq.py --help` for the full option list.
 ## How it works
 
 1. Discover NUMA topology from `/sys/devices/system/node/node*/cpulist`.
-2. Match `/proc/interrupts` lines against the filters and group IRQs by
+2. Drop isolated cores (`isolcpus=`/`nohz_full=`) from the CPU pool unless
+   `--use-isolated` is given.
+3. Match `/proc/interrupts` lines against the filters and group IRQs by
    device.
-3. Resolve each IRQ's NUMA node from `/proc/irq/<n>/node`, falling back to
+4. Resolve each IRQ's NUMA node from `/proc/irq/<n>/node`, falling back to
    the owning PCI device's `numa_node` (via `msi_irqs`/`irq`), then to a
    network device's `numa_node`, then to all CPUs.
-4. Plan one CPU per IRQ, round-robin within its NUMA node.
-5. Stop `irqbalance` (`systemctl stop`, else `killall`) unless
+5. Plan one CPU per IRQ, round-robin within its NUMA node. With `--verify`,
+   print the plan-vs-current table and stop here.
+6. Stop `irqbalance` (`systemctl stop`, else `killall`) unless
    `--keep-irqbalance` is set.
-6. For each IRQ: skip if a driver `affinity_hint` disagrees (unless
+7. For each IRQ: skip if a driver `affinity_hint` disagrees (unless
    `--ignore-hints`), skip if already correct, otherwise write the CPU to
    `smp_affinity_list`. Write failures are counted and produce a non-zero
    exit code.
-7. With `--rps`, set every `queues/rx-*/rps_cpus` to the NIC's full
+8. With `--rps`, set every `queues/rx-*/rps_cpus` to the NIC's full
    NUMA-node mask, and pin each `queues/tx-*/xps_cpus` to one node core
    round-robin.
 
