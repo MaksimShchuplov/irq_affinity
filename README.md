@@ -45,6 +45,27 @@ decide the numbers.
 - Python 3.8 or newer (standard library only)
 - Root privileges to write `/proc/irq/*/smp_affinity_list`
 
+## Install
+
+```bash
+# Isolated install of the CLI (recommended):
+pipx install irq-affinity
+
+# Or into the current environment:
+pip install irq-affinity
+
+# From a release wheel / this checkout:
+pip install ./irq_affinity-*.whl
+pip install .
+```
+
+This installs an `irq-affinity` command. You can also run the single file
+directly without installing anything — it has no third-party dependencies:
+
+```bash
+sudo python3 irq.py --dry-run
+```
+
 ## Usage
 
 ```bash

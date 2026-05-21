@@ -1,3 +1,56 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "irq-affinity"
+dynamic = ["version"]
+description = "NUMA-aware IRQ affinity for Linux (a smarter, hint-respecting irqbalance replacement)"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [{ name = "Maksim Shchuplov", email = "shchuplov@gmail.com" }]
+keywords = [
+    "irq",
+    "affinity",
+    "smp_affinity",
+    "numa",
+    "irqbalance",
+    "rps",
+    "xps",
+    "linux",
+    "performance",
+    "low-latency",
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Hardware",
+    "Topic :: System :: Networking",
+    "Topic :: System :: Systems Administration",
+]
+
+[project.urls]
+Homepage = "https://github.com/MaksimShchuplov/irq_affinity"
+Repository = "https://github.com/MaksimShchuplov/irq_affinity"
+Issues = "https://github.com/MaksimShchuplov/irq_affinity/issues"
+
+[project.scripts]
+irq-affinity = "irq:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "ruff>=0.4"]
+
+[tool.setuptools]
+py-modules = ["irq"]
+
+[tool.setuptools.dynamic]
+version = { attr = "irq.__version__" }
+
 [tool.ruff]
 line-length = 100
 target-version = "py38"
