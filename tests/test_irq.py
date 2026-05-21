@@ -49,6 +49,21 @@ def test_build_affinity_masks_rejects_nonpositive() -> None:
         irq.build_affinity_masks(0)
 
 
+def test_normalize_affinity_plain_hex() -> None:
+    assert irq.normalize_affinity("ff\n") == 255
+    assert irq.normalize_affinity("  1 ") == 1
+
+
+def test_normalize_affinity_comma_grouped() -> None:
+    # >32 CPU systems group the mask into comma-separated 32-bit words.
+    assert irq.normalize_affinity("00000001,00000000") == 1 << 32
+    assert irq.normalize_affinity("00000000,00000001") == 1
+
+
+def test_normalize_affinity_empty() -> None:
+    assert irq.normalize_affinity("") == 0
+
+
 def test_parse_interrupts_default_filters(interrupts_file: Path) -> None:
     pairs = list(irq.parse_interrupts(interrupts_file, irq.DEFAULT_FILTERS))
     assert pairs == [
@@ -72,9 +87,7 @@ def test_parse_interrupts_skips_header(interrupts_file: Path) -> None:
 
 
 def test_group_irqs_by_device_dedupes_and_sorts() -> None:
-    grouped = irq.group_irqs_by_device(
-        [("eth0", 46), ("eth0", 45), ("eth0", 45), ("megasas0", 60)]
-    )
+    grouped = irq.group_irqs_by_device([("eth0", 46), ("eth0", 45), ("eth0", 45), ("megasas0", 60)])
     assert grouped == {"eth0": [45, 46], "megasas0": [60]}
 
 
@@ -83,7 +96,7 @@ def test_apply_affinity_dry_run_makes_no_writes(monkeypatch, capsys) -> None:
         raise AssertionError("write_affinity must not run in dry-run mode")
 
     monkeypatch.setattr(irq, "write_affinity", boom)
-    monkeypatch.setattr(irq, "read_current_affinity", lambda _irq: "0")
+    monkeypatch.setattr(irq, "read_current_affinity", lambda _irq: 0)
 
     grouped = {"eth0": [45, 46]}
     errors = irq.apply_affinity(grouped, ["1", "2"], dry_run=True)
@@ -92,12 +105,10 @@ def test_apply_affinity_dry_run_makes_no_writes(monkeypatch, capsys) -> None:
 
 
 def test_apply_affinity_skips_when_already_set(monkeypatch, capsys) -> None:
-    # IRQs [45, 46] round-robin over ["1", "2"] → 45→"1", 46→"2".
-    expected = {45: "1", 46: "2"}
+    # IRQs [45, 46] round-robin over ["1", "2"] → 45→0x1, 46→0x2.
+    expected = {45: 1, 46: 2}
     monkeypatch.setattr(irq, "read_current_affinity", lambda n: expected[n])
-    monkeypatch.setattr(
-        irq, "write_affinity", lambda *a, **kw: pytest.fail("should not write")
-    )
+    monkeypatch.setattr(irq, "write_affinity", lambda *a, **kw: pytest.fail("should not write"))
 
     errors = irq.apply_affinity({"eth0": [45, 46]}, ["1", "2"], dry_run=False)
     assert errors == 0
@@ -105,7 +116,7 @@ def test_apply_affinity_skips_when_already_set(monkeypatch, capsys) -> None:
 
 
 def test_apply_affinity_counts_os_errors(monkeypatch, capsys) -> None:
-    monkeypatch.setattr(irq, "read_current_affinity", lambda _irq: "0")
+    monkeypatch.setattr(irq, "read_current_affinity", lambda _irq: 0)
 
     def fail_write(_irq, _mask):
         raise PermissionError("denied")

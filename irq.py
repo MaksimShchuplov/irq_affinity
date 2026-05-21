@@ -79,9 +79,20 @@ def group_irqs_by_device(pairs):
     return grouped
 
 
-def read_current_affinity(irq: int) -> str:
+def normalize_affinity(raw: str) -> int:
+    """Parse an smp_affinity value into an int.
+
+    The kernel groups the bitmask into comma-separated 32-bit words on
+    machines with more than 32 CPUs (e.g. "00000001,00000000"); strip the
+    commas before converting so the comparison works on any CPU count.
+    """
+    cleaned = raw.strip().replace(",", "")
+    return int(cleaned, 16) if cleaned else 0
+
+
+def read_current_affinity(irq: int) -> int:
     path = PROC_IRQ / str(irq) / "smp_affinity"
-    return path.read_text().strip().lstrip("0") or "0"
+    return normalize_affinity(path.read_text())
 
 
 def write_affinity(irq: int, mask: str) -> None:
@@ -114,12 +125,13 @@ def apply_affinity(grouped, masks, dry_run: bool = False) -> int:
             mask = masks[index % len(masks)]
             label = f"setting up irq {irq} to CPU core {index % len(masks)}"
             try:
-                current = read_current_affinity(irq)
-                if current.lower() == mask.lower():
+                if read_current_affinity(irq) == int(mask, 16):
                     print(f"{label}................{Colors.OKGREEN}[already set]{Colors.ENDC}")
                     continue
                 if dry_run:
-                    print(f"{label}................{Colors.WARNING}[dry-run mask={mask}]{Colors.ENDC}")
+                    print(
+                        f"{label}................{Colors.WARNING}[dry-run mask={mask}]{Colors.ENDC}"
+                    )
                     continue
                 write_affinity(irq, mask)
                 print(f"{label}................{Colors.OKGREEN}[OK!]{Colors.ENDC}")
